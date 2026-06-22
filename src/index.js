@@ -18,6 +18,13 @@ app.use(express.json());
 const limiter = rateLimit({ windowMs: 60 * 1000, max: 100, message: { error: 'Demasiadas solicitudes' } });
 app.use(limiter);
 
+// ── Rutas de autenticación (no protegidas) ────────────────────────────────
+app.use('/api/auth', require('./authRoutes'));
+
+// ── Aplicar verificación de token globalmente a rutas protegidas ───────────
+const { verifyToken } = require('./authMiddleware');
+app.use('/api', verifyToken);
+
 // ── Rutas BFF (agrega llamadas a microservicios) ─────────────────────────────
 app.use('/api/inventory',  require('./routes/inventoryBff'));
 app.use('/api/orders',     require('./routes/ordersBff'));
@@ -35,5 +42,8 @@ app.use((err, req, res, next) => {
   res.status(err?.status || 500).json({ error: message });
 });
 
-app.listen(PORT, () => console.log(`[BFF] Corriendo en puerto ${PORT}`));
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`[BFF] Corriendo en puerto ${PORT}`));
+}
+
 module.exports = app;

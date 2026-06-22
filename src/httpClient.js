@@ -3,6 +3,7 @@
  * Implementa retry y timeout para mayor resiliencia.
  */
 const axios = require('axios');
+const CircuitBreaker = require('opossum');
 
 const SERVICES = {
   inventory: process.env.INVENTORY_URL || 'http://localhost:4001',
@@ -34,9 +35,28 @@ client.interceptors.response.use(
   }
 );
 
-const get    = (service, path, params) => client.get(`${SERVICES[service]}${path}`, { params });
-const post   = (service, path, data)   => client.post(`${SERVICES[service]}${path}`, data);
-const put    = (service, path, data)   => client.put(`${SERVICES[service]}${path}`, data);
-const del    = (service, path)         => client.delete(`${SERVICES[service]}${path}`);
+// Circuit breaker options (tune as needed)
+const breakerOptions = { timeout: 12000, errorThresholdPercentage: 50, resetTimeout: 30000 };
+
+// Create one breaker per service
+const breakers = Object.keys(SERVICES).reduce((acc, svc) => {
+  const fn = (config) => client.request(config);
+  const breaker = new CircuitBreaker(fn, breakerOptions);
+  breaker.fallback(() => { throw { status: 503, message: `Fallback: servicio ${svc} no disponible` }; });
+  acc[svc] = breaker;
+  return acc;
+}, {});
+
+function buildConfig(service, method, path, opts = {}) {
+  return Object.assign({
+    method,
+    url: `${SERVICES[service]}${path}`,
+  }, opts);
+}
+
+const get  = (service, path, params) => breakers[service].fire(buildConfig(service, 'get', path, { params }));
+const post = (service, path, data)   => breakers[service].fire(buildConfig(service, 'post', path, { data }));
+const put  = (service, path, data)   => breakers[service].fire(buildConfig(service, 'put', path, { data }));
+const del  = (service, path)         => breakers[service].fire(buildConfig(service, 'delete', path));
 
 module.exports = { get, post, put, del };
