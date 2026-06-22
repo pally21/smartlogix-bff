@@ -32,6 +32,18 @@ app.use('/api/shipping',   require('./routes/shippingBff'));
 app.use('/api/payment',    require('./routes/paymentBff'));
 app.use('/api/dashboard',  require('./routes/dashboardBff'));
 
+// Prometheus metrics endpoint
+const { exposeMetrics } = require('./httpClient');
+app.get('/metrics', async (req, res) => {
+  try {
+    const body = await exposeMetrics();
+    res.set('Content-Type', 'text/plain; version=0.0.4');
+    res.send(body);
+  } catch (e) {
+    res.status(500).send('metrics error');
+  }
+});
+
 // ── Health Check ─────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ status: 'ok', service: 'bff-service', timestamp: new Date() }));
 

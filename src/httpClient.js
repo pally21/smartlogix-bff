@@ -4,6 +4,7 @@
  */
 const axios = require('axios');
 const CircuitBreaker = require('opossum');
+const clientMetrics = require('prom-client');
 
 const SERVICES = {
   inventory: process.env.INVENTORY_URL || 'http://localhost:4001',
@@ -38,11 +39,26 @@ client.interceptors.response.use(
 // Circuit breaker options (tune as needed)
 const breakerOptions = { timeout: 12000, errorThresholdPercentage: 50, resetTimeout: 30000 };
 
+// Prometheus metrics
+const register = new clientMetrics.Registry();
+clientMetrics.collectDefaultMetrics({ register });
+const cbSuccess = new clientMetrics.Counter({ name: 'bff_cb_success_total', help: 'Circuit breaker success count', registers: [register], labelNames: ['service'] });
+const cbFailure = new clientMetrics.Counter({ name: 'bff_cb_failure_total', help: 'Circuit breaker failure count', registers: [register], labelNames: ['service'] });
+const cbState = new clientMetrics.Gauge({ name: 'bff_cb_state', help: 'Circuit breaker state (0 closed,1 open,2 half-open)', registers: [register], labelNames: ['service'] });
+
+function exposeMetrics() { return register.metrics(); }
+
 // Create one breaker per service
 const breakers = Object.keys(SERVICES).reduce((acc, svc) => {
   const fn = (config) => client.request(config);
   const breaker = new CircuitBreaker(fn, breakerOptions);
   breaker.fallback(() => { throw { status: 503, message: `Fallback: servicio ${svc} no disponible` }; });
+  // metrics listeners
+  breaker.on('success', () => cbSuccess.inc({ service: svc }));
+  breaker.on('failure', () => cbFailure.inc({ service: svc }));
+  breaker.on('open', () => cbState.set({ service: svc }, 1));
+  breaker.on('halfOpen', () => cbState.set({ service: svc }, 2));
+  breaker.on('close', () => cbState.set({ service: svc }, 0));
   acc[svc] = breaker;
   return acc;
 }, {});
@@ -59,4 +75,4 @@ const post = (service, path, data)   => breakers[service].fire(buildConfig(servi
 const put  = (service, path, data)   => breakers[service].fire(buildConfig(service, 'put', path, { data }));
 const del  = (service, path)         => breakers[service].fire(buildConfig(service, 'delete', path));
 
-module.exports = { get, post, put, del };
+module.exports = { get, post, put, del, exposeMetrics };
